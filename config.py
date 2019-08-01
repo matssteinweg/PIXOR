@@ -1,8 +1,8 @@
 import numpy as np
 
-######################
-# Relevant Constants #
-######################
+###########################
+# project-level constants #
+###########################
 
 # observable area in m in velodyne coordinates
 VOX_Y_MIN = -40
@@ -20,8 +20,8 @@ VOX_Z_DIVISION = 0.1
 # dimensionality of network input (voxelized point cloud)
 INPUT_DIM_0 = int((VOX_X_MAX-VOX_X_MIN) // VOX_X_DIVISION) + 1
 INPUT_DIM_1 = int((VOX_Y_MAX-VOX_Y_MIN) // VOX_Y_DIVISION) + 1
-INPUT_DIM_2 = int((VOX_Z_MAX-VOX_Z_MIN) // VOX_Z_DIVISION) + 1 + 1  # + 1 for average reflectance value of the points
-# in the respective voxel
+# + 1 for average reflectance value of the points in the respective voxel
+INPUT_DIM_2 = int((VOX_Z_MAX-VOX_Z_MIN) // VOX_Z_DIVISION) + 1 + 1
 
 # dimensionality of network output
 OUTPUT_DIM_0 = INPUT_DIM_0 // 4

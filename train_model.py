@@ -1,9 +1,82 @@
 import torch.optim as optim
-from early_stopping import EarlyStopping
 from load_data import *
-from PIXOR_Net import PIXOR
+from PIXOR import PIXOR
 import torch.nn as nn
 import time
+
+##################
+# early stopping #
+##################
+
+
+class EarlyStopping:
+    """
+    Early stops the training if validation loss doesn't improve after a given patience.
+    """
+
+    def __init__(self, patience=7, verbose=False):
+        """
+        :param patience: How many epochs wait after the last validation loss improvement
+        :param verbose: If True, prints a message for each validation loss improvement.
+        """
+
+        self.patience = patience
+        self.verbose = verbose
+        self.counter = 0
+        self.best_score = None
+        self.best_epoch = None
+        self.early_stop = False
+        self.val_loss_min = np.Inf
+
+    def __call__(self, val_loss, epoch, model):
+
+        score = -val_loss
+
+        # first epoch
+        if self.best_score is None:
+            self.best_score = score
+            self.best_epoch = epoch + 1
+            self.save_checkpoint(val_loss, model)
+
+        # validation loss increased
+        elif score < self.best_score:
+
+            # increase counter
+            self.counter += 1
+
+            print('Validation loss did not decrease ({:.6f} --> {:.6f})'.format(self.val_loss_min, val_loss))
+            print('EarlyStopping counter: {} out of {}'.format(self.counter, self.patience))
+            print('###########################################################')
+
+            # stop training if patience is reached
+            if self.counter >= self.patience:
+                self.early_stop = True
+
+        # validation loss decreased
+        else:
+            self.best_score = score
+            self.best_epoch = epoch + 1
+            self.save_checkpoint(val_loss, model)
+
+            # reset counter
+            self.counter = 0
+
+    def save_checkpoint(self, val_loss, model):
+        """
+        Saves model when validation loss decreased.
+        """
+
+        if self.verbose:
+            print('Validation loss decreased ({:.6f} --> {:.6f}).  '
+                  'Saving model ...'.format(self.val_loss_min, val_loss))
+            print('###########################################################')
+
+        # save model
+        torch.save(model.state_dict(), 'Models/PIXOR_Epoch_' + str(self.best_epoch) + '.pt')
+
+        # set current loss as new minimum loss
+        self.val_loss_min = val_loss
+
 
 ##############
 # focal loss #
@@ -11,16 +84,17 @@ import time
 
 
 class FocalLoss(nn.Module):
+    """
+    Focal loss class. Stabilize training by reducing the weight of easily classified background sample and focussing
+    on difficult foreground detections.
+    """
+
     def __init__(self, gamma=0, size_average=False):
         super(FocalLoss, self).__init__()
         self.gamma = gamma
         self.size_average = size_average
 
     def forward(self, prediction, target):
-
-        # pass class prediction through sigmoid
-        sigmoid = nn.Sigmoid()
-        prediction = sigmoid(prediction)
 
         # get class probability
         pt = torch.where(target == 1.0, prediction, 1-prediction)
@@ -40,6 +114,12 @@ class FocalLoss(nn.Module):
 
 
 def calc_loss(batch_predictions, batch_labels):
+    """
+    Calculate the final loss function as a sum of the classification and the regression loss.
+    :param batch_predictions: predictions for the current batch | shape: [batch_size, OUTPUT_DIM_0, OUTPUT_DIM_1, OUTPUT_DIM_CLA+OUTPUT_DIM_REG]
+    :param batch_labels: labels for the current batch | shape: [batch_size, OUTPUT_DIM_0, OUTPUT_DIM_1, OUTPUT_DIM_CLA+OUTPUT_DIM_REG]
+    :return: compouted loss
+    """
 
     # classification loss
     classification_prediction = batch_predictions[:, :, :, -1].contiguous().flatten()
@@ -67,21 +147,23 @@ def calc_loss(batch_predictions, batch_labels):
 
 
 ###############
-# Train Model #
+# train model #
 ###############
 
 
 def train_model(model, optimizer, scheduler, data_loaders, n_epochs=25, show_times=False):
 
     # evaluation dict
-    # metrics = {'train_loss': [], 'val_loss': [], 'lr': []}
-    metrics = np.load('Metrics/metrics_5.npz', allow_pickle=True)['history'].item()
+    metrics = {'train_loss': [], 'val_loss': [], 'lr': []}
+
     # early stopping object
     early_stopping = EarlyStopping(patience=8, verbose=True)
 
-    # epochs
+    # moving loss
     moving_loss = {'train': metrics['train_loss'][-1], 'val': metrics['val_loss'][-1]}
-    for epoch in range(5, n_epochs):
+
+    # epochs
+    for epoch in range(n_epochs):
 
         # each epoch has a training and validation phase
         for phase in ['train', 'val']:
@@ -134,7 +216,7 @@ def train_model(model, optimizer, scheduler, data_loaders, n_epochs=25, show_tim
 
                         if (batch_id+1) % 10 == 0:
                             n_batches_per_epoch = data_loaders[phase].dataset.__len__() // data_loaders[phase].batch_size
-                            print("{:d}/{:d} iterations\tAvg. Loss: {:.4f}".format(batch_id+1, n_batches_per_epoch, moving_loss[phase]))
+                            print("{:d}/{:d} iterations | training loss: {:.4f}".format(batch_id+1, n_batches_per_epoch, moving_loss[phase]))
 
         # keep track of learning rate
         for param_group in optimizer.param_groups:
@@ -174,21 +256,18 @@ if __name__ == '__main__':
     # training parameters
     n_epochs = 30
     batch_size = 6
-    initial_learning_rate = 1e-4
+    initial_learning_rate = 1e-3
 
     # create data loader
-    base_dir = 'kitti/'
-    dataset_dir = 'object/'
-    root_dir = os.path.join(base_dir, dataset_dir)
+    root_dir = 'Data/'
     data_loader = load_dataset(root=root_dir, batch_size=batch_size, device=device)
 
     # create model
     pixor = PIXOR().to(device)
-    pixor.load_state_dict(torch.load('Models/PIXOR_Epoch_5.pt', map_location=device))
 
     # create optimizer and scheduler objects
     optimizer = optim.Adam(filter(lambda p: p.requires_grad, pixor.parameters()), lr=initial_learning_rate)
-    scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, [20, 25], gamma=0.1)
+    scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, [10, 20], gamma=0.1)
 
     # train model
     history = train_model(pixor, optimizer, scheduler, data_loader, n_epochs=n_epochs)

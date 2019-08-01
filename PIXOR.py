@@ -203,6 +203,7 @@ class DetectionHeader(nn.Module):
         self.conv4 = copy.deepcopy(basic_block)
         self.classification = nn.Conv2d(n_output, 1, kernel_size=(3, 3), padding=(1, 1))
         self.regression = nn.Conv2d(n_output, 6, kernel_size=(3, 3), padding=(1, 1))
+        self.sigmoid = nn.Sigmoid()
 
     def forward(self, x):
 
@@ -210,7 +211,7 @@ class DetectionHeader(nn.Module):
         x = self.conv2(x)
         x = self.conv3(x)
         x = self.conv4(x)
-        class_output = self.classification(x)
+        class_output = self.sigmoid(self.classification(x))
         regression_output = self.regression(x)
 
         return class_output, regression_output
@@ -269,12 +270,8 @@ class PIXOR(nn.Module):
 
 if __name__ == '__main__':
 
-    ###################
-    # Executable: Yes #
-    ###################
-
     # exemplary input point cloud
-    base_dir = 'kitti/object/training/velodyne'
+    base_dir = 'Data/training/velodyne'
     index = 1
     lidar_filename = os.path.join(base_dir, '%06d.bin' % index)
     lidar_data = kitti_utils.load_velo_scan(lidar_filename)

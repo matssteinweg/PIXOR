@@ -67,10 +67,6 @@ class KittiObject(object):
 
 if __name__ == '__main__':
 
-    ###################
-    # Executable: Yes #
-    ###################
-
     """
     Explore the dataset. For a random selection of indices, the corresponding camera image will be displayed along with 
     all 3D bounding box annotations for the class "Cars". Moreover, the BEV image of the LiDAR point cloud will be 
@@ -79,9 +75,7 @@ if __name__ == '__main__':
     """
 
     # root directory of the dataset
-    base_dir = 'kitti/'
-    dataset_dir = 'object/'
-    root_dir = os.path.join(base_dir, dataset_dir)
+    root_dir = 'Data/'
 
     # create dataset
     train_dataset = KittiObject(root_dir)
@@ -126,6 +120,7 @@ if __name__ == '__main__':
         # create binary mask from relevant pixels in label
         label_mask = np.where(np.sum(np.abs(regression_label), axis=2) > 0, 255, 0).astype(np.uint8)
 
+        # remove all points outside the specified area
         idx = np.where(point_cloud[:, 0] > VOX_X_MIN)
         point_cloud = point_cloud[idx]
         idx = np.where(point_cloud[:, 0] < VOX_X_MAX)

@@ -4,20 +4,18 @@ import os
 import cv2
 import kitti_utils
 from config import *
-import math
 import time
 
 
-#####################
-# custom fc_collate #
-#####################
+############################
+# custom collate functions #
+############################
 
 
 def my_collate_test(batch):
     """
-    Collate function for test dataset.
-    How to concatenate individual samples to a batch.
-    Point Clouds will be stacked along first dimension, labels and calibs will be returned as a list
+    Collate function for test dataset. How to concatenate individual samples to a batch.
+    Point Clouds will be stacked along first dimension, labels and calibration objects will be returned as a list
     :param batch: list containing a tuple of items for each sample
     :return: batch data in desired form
     """
@@ -36,8 +34,7 @@ def my_collate_test(batch):
 
 def my_collate_train(batch):
     """
-    Collate function for training dataset.
-    How to concatenate individual samples to a batch.
+    Collate function for training dataset. How to concatenate individual samples to a batch.
     Point Clouds and labels will be stacked along first dimension
     :param batch: list containing a tuple of items for each sample
     :return: batch data in desired form
@@ -96,17 +93,22 @@ def compute_pixel_labels(regression_label, classification_label, label, bbox_cor
     x_lin = np.linspace(VOX_Y_MIN, VOX_Y_MAX-0.4, OUTPUT_DIM_1)
     y_lin = np.linspace(VOX_X_MAX, VOX_X_MIN+0.4, OUTPUT_DIM_0)
     px_x, px_y = np.meshgrid(x_lin, y_lin)
+
     # create regression target
     target = np.array([[np.cos(angle_rad), np.sin(angle_rad), -center_x_m, -center_y_m, np.log(width_m), np.log(length_m)]])
     target = np.tile(target, (OUTPUT_DIM_0, OUTPUT_DIM_1, 1))
+
     # take offset from pixel as regression target for bounding box location
     target[:, :, 2] += px_x
     target[:, :, 3] += px_y
+
     # normalize target
     target = (target - REG_MEAN) / REG_STD
+
     # zero-out non-relevant pixels
     target *= bbox_mask
 
+    # add current target to label for currently inspected point cloud
     regression_label += target
     classification_label += bbox_mask
 
@@ -123,7 +125,7 @@ class PointCloudDataset(Dataset):
     Characterizes a dataset for PyTorch
     """
 
-    def __init__(self, root_dir, split='training', device=torch.device('cpu'), show_times=True):
+    def __init__(self, root_dir, split='training', device=torch.device('cpu'), show_times=True, get_image=False):
         """
         Dataset for training and testing containing point cloud, calibration object and in case of training labels
         :param root_dir: root directory of the dataset
@@ -133,6 +135,7 @@ class PointCloudDataset(Dataset):
         """
 
         self.show_times = show_times  # debug
+        self.get_image = get_image  # load camera image
 
         self.device = device
         self.root_dir = root_dir
@@ -147,18 +150,17 @@ class PointCloudDataset(Dataset):
             print('Unknown split: %s' % split)
             exit(-1)
 
-        # paths to lidar, calibration and label directories
+        # paths to camera, lidar, calibration and label directories
         self.lidar_dir = os.path.join(self.split_dir, 'velodyne')
         self.calib_dir = os.path.join(self.split_dir, 'calib')
         self.label_dir = os.path.join(self.split_dir, 'label_2')
+        self.image_dir = os.path.join(self.split_dir, 'image_2')
 
     def __len__(self):
         # Denotes the total number of samples
         return self.num_samples
 
     def __getitem__(self, index):
-
-        print('Index: ', index)
 
         # start time
         get_item_start_time = time.time()
@@ -181,19 +183,10 @@ class PointCloudDataset(Dataset):
         # channels along first dimensions according to PyTorch convention
         voxel_point_cloud = voxel_point_cloud.permute([2, 0, 1])
 
-        # # random rotation between -5 and 5 degrees
-        # angle = random.uniform(-5, 5) / 360 * (2 * math.pi)
-        # c = np.cos(angle)
-        # s = np.sin(angle)
-        # R = np.array([[c, s, 0], [-s, c, 0], [0, 0, 1]])
-        # lidar_data[:, :3] = np.dot(R, lidar_data[:, :3].T).T
-        #
-        # # horizontal flipping in 50% of the cases
-        # flip = random.choice([0, 1])
-        # if flip:
-        #     lidar_data[:, 1] = -1 * lidar_data[:, 1]
-
-        # create torch tensor from numpy array
+        # get image
+        if self.get_image:
+            image_filename = os.path.join(self.image_dir, '%06d.png' % index)
+            image = kitti_utils.get_image(image_filename)
 
         # get current time
         read_labels_start_time = time.time()
@@ -217,6 +210,7 @@ class PointCloudDataset(Dataset):
             # create empty pixel labels
             regression_label = np.zeros((OUTPUT_DIM_0, OUTPUT_DIM_1, OUTPUT_DIM_REG))
             classification_label = np.zeros((OUTPUT_DIM_0, OUTPUT_DIM_1, OUTPUT_DIM_CLA))
+
             # iterate over all 3D label objects in list
             for label in labels:
                 if label.type == 'Car':
@@ -251,15 +245,17 @@ class PointCloudDataset(Dataset):
             return voxel_point_cloud, training_label
 
         else:
-
-            return voxel_point_cloud, labels, calib
+            if self.get_image:
+                return image, voxel_point_cloud, labels, calib
+            else:
+                return voxel_point_cloud, labels, calib
 
 
 #################
 # load datasets #
 #################
 
-def load_dataset(root='./kitti/object/', batch_size=1, train_val_split=0.9, test_set=False,
+def load_dataset(root='Data/', batch_size=1, train_val_split=0.9, test_set=False,
                  device=torch.device('cpu'), show_times=False):
     """
     Create a data loader that reads in the data from a directory of png-images
@@ -313,9 +309,7 @@ def load_dataset(root='./kitti/object/', batch_size=1, train_val_split=0.9, test
 if __name__ == '__main__':
 
     # create data loader
-    base_dir = 'kitti/'
-    dataset_dir = 'object/'
-    root_dir = os.path.join(base_dir, dataset_dir)
+    root_dir = 'Data/'
     batch_size = 1
     device = torch.device('cpu')
     data_loader = load_dataset(root=root_dir, batch_size=batch_size, device=device, show_times=True)['train']

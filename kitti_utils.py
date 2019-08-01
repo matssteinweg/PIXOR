@@ -197,6 +197,7 @@ def compute_box_3d(label, P, scale=1.0):
     Takes an object and a projection matrix (P) and projects the 3d bounding box into the image plane.
     :param label: 3d label object
     :param P: projection matrix
+    :param scale: scale the bounding box
     :return: corners_2d: (8,2) array in left image coord.
              corners_3d: (8,3) array in in rect camera coord.
     """
@@ -265,17 +266,18 @@ def draw_projected_box_3d(image, corners_2d, color=(0, 255, 0), thickness=2):
 
 
 # draw projected BEV bounding box
-def draw_projected_box_bev(image, corners_3d, color=(0, 255, 0), thickness=2):
+def draw_projected_box_bev(image, corners_3d, color=(0, 255, 0), thickness=1, confidence_score=None):
     """
      Draw BEV bounding box on image
      :param image: bev image of observable area
      :param corners_3d: corners of 3D bounding box in camera coordinates
      :param color:
      :param thickness:
+     :param confidence_score: optional confidence score of the prediction to be displayed next to the bounding box
      :return: image with BEV bounding box
      """
 
-    # extract corners of BEV bounding box
+    # extract corners of BEV bounding box either already transformed to x/y-coordinates or from camera coordinates
     if corners_3d.shape[1] == 3:
         corners_x = corners_3d[:4, 0]
         corners_y = corners_3d[:4, 2]
@@ -286,24 +288,26 @@ def draw_projected_box_bev(image, corners_3d, color=(0, 255, 0), thickness=2):
     # convert coordinates from m to image coordinates
     pixel_corners_x = ((corners_x - VOX_Y_MIN) // VOX_Y_DIVISION).astype(np.int32)
     pixel_corners_y = (INPUT_DIM_0 - ((corners_y - VOX_X_MIN) // VOX_X_DIVISION)).astype(np.int32)
-    corners = np.vstack((pixel_corners_x, pixel_corners_y)).T
-
-    # darker color for front line, lighter color inside
-    color_inside = tuple([c - 55 if c == 255 else c for c in list(color)])
-    color_front = tuple([c - 155 if c == 255 else c for c in list(color)])
-
-    # draw polygon of bounding box on image
-    # cv2.fillPoly(image, pts=[corners], color=color_inside)
 
     # draw BEV bounding box and mark front in different color
     image = cv2.line(image, (pixel_corners_x[3], pixel_corners_y[3]), (pixel_corners_x[0], pixel_corners_y[0]), color,
                      thickness)
-    image = cv2.line(image, (pixel_corners_x[0], pixel_corners_y[0]), (pixel_corners_x[1], pixel_corners_y[1]), color_front,
-                     thickness)
+    image = cv2.line(image, (pixel_corners_x[0], pixel_corners_y[0]), (pixel_corners_x[1], pixel_corners_y[1]), color,
+                     thickness+1)
     image = cv2.line(image, (pixel_corners_x[1], pixel_corners_y[1]), (pixel_corners_x[2], pixel_corners_y[2]), color,
                      thickness)
     image = cv2.line(image, (pixel_corners_x[2], pixel_corners_y[2]), (pixel_corners_x[3], pixel_corners_y[3]), color,
                      thickness)
+
+    # display confidence score if provided
+    if confidence_score:
+        text = str(round(confidence_score, 2))  # round confidence score to two decimal digits
+        font = cv2.FONT_HERSHEY_DUPLEX
+        font_scale = 0.5
+        size = cv2.getTextSize(text, font, font_scale, thickness)  # get the size of the displayed text
+        pos_x = int(np.mean(pixel_corners_x)) - (size[0][0] // 2)  # center text in x-center of bounding box
+        pos_y = np.min(pixel_corners_y) - 5  # display text slightly above the bounding box
+        cv2.putText(image, text, (pos_x, pos_y), font, font_scale, color=color)
 
     return image
 
@@ -353,6 +357,11 @@ def load_velo_scan(velo_filename, dtype=np.float32, n_vec=4):
     scan = np.fromfile(velo_filename, dtype=dtype)
     scan = scan.reshape((-1, n_vec))
     return scan
+
+
+# read image
+def get_image(img_filename):
+    return cv2.imread(img_filename)
 
 
 ####################

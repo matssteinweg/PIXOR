@@ -1,37 +1,132 @@
 from load_data import *
-from PIXOR_Net import PIXOR
-import torch.nn as nn
-import cv2
-import math
+from PIXOR import PIXOR
 from shapely.geometry import Polygon
 from config import *
+from scipy.linalg import block_diag
 
 
-############
-# bbox IoU #
-############
+#######################
+# reshape predictions #
+#######################
+
+def process_regression_target(valid_reg_predictions, validity_mask):
+    """
+        Convert the raw regression prediction into camera coordinates of a bounding box.
+        :param valid_reg_predictions: raw regression output | shape: [N_VALID, OUTPUT_DIM_REG]
+        :param validity_mask: mask of predictions indices with confidence score higher than threshold. Required for the
+                              calculation of the camera coordinates of the predicted bounding box | shape: [INPUT_DIM_0, INPUT_DIM_1]
+        :return: point_cloud_box_predictions: predicted box coordinates | shape: [N_VALID, 8]
+        """
+
+    # get camera coordinates of the pixel corner for all valid predictions
+    x_lin = np.linspace(VOX_Y_MIN, VOX_Y_MAX - 0.4, OUTPUT_DIM_1)
+    y_lin = np.linspace(VOX_X_MAX, VOX_X_MIN + 0.4, OUTPUT_DIM_0)
+    px_x, px_y = np.meshgrid(x_lin, y_lin)
+    px_x = px_x.reshape((-1,))[validity_mask]
+    px_y = px_y.reshape((-1,))[validity_mask]
+
+    # get the camera coordinates of the center of the predicted bounding boxes
+    center_x = np.broadcast_to((px_x - valid_reg_predictions[:, 2]).reshape(-1, 1), (valid_reg_predictions.shape[0], 4))
+    center_y = np.broadcast_to((px_y - valid_reg_predictions[:, 3]).reshape(-1, 1), (valid_reg_predictions.shape[0], 4))
+    centers = np.hstack((center_x, center_y))
+
+    # get the predicted angles for all bounding boxes
+    prediction_angles = np.arctan2(valid_reg_predictions[:, 1], valid_reg_predictions[:, 0])
+    prediction_cos = np.cos(prediction_angles)
+    prediction_sin = np.sin(prediction_angles)
+
+    # build a block diagonal rotation matrix to rotate all predicted bounding boxes
+    rot_matrices = np.stack((prediction_cos, prediction_sin, -prediction_sin, prediction_cos), axis=1).reshape((-1, 2))
+    rot_matrices = [rot_matrices[i:i + 2, :] for i in range(0, rot_matrices.shape[0], 2)]
+    block_rot_matrix = block_diag(*rot_matrices)
+
+    # get predicted width and length for all bounding boxes
+    width = np.exp(valid_reg_predictions[:, 4])
+    length = np.exp(valid_reg_predictions[:, 5])
+
+    # get all bounding box corners
+    x_corners = np.stack((length / 2, length / 2, -length / 2, -length / 2), axis=1)
+    y_corners = np.stack((-width / 2, width / 2, width / 2, -width / 2), axis=1)
+    corners = np.stack((x_corners, y_corners), axis=1).reshape((-1, 4))
+
+    # rotate the bounding boxes
+    corners = np.dot(block_rot_matrix, corners).reshape(-1, 8)
+    # translate the bounding boxes
+    point_cloud_box_predictions = corners + centers
+
+    return point_cloud_box_predictions
+
+
+##########################
+# non-maximum suppression #
+##########################
+
+def perform_nms(valid_class_predictions, valid_box_predictions, nms_threshold):
+    """
+        Perform Non-Maximum Suppression to eliminate overlapping predictions.
+        :param valid_class_predictions: all confidence scores higher than the threshold | shape: [N_VALID, ]
+        :param valid_box_predictions: all corresponding bounding box predictions | shape: [N_VALID, 8]
+        :param nms_threshold: threshold for maximum overlap between two bounding boxes
+        :return: sorted_class_predictions: remaining confidence scores | shape: [N_FINAL, ]
+                 sorted_box_predictions: remaining box predictions | shape: [N_FINAL, 8]
+        """
+
+    # sort the detections such that the entry with the maximum confidence score is at the top
+    sorted_indices = np.argsort(valid_class_predictions)[::-1]
+    sorted_box_predictions = valid_box_predictions[sorted_indices]
+    sorted_class_predictions = valid_class_predictions[sorted_indices]
+
+    for i in range(sorted_box_predictions.shape[0]):
+        # get the IOUs of all boxes with the currently most certain bounding box
+        try:
+            ious = np.zeros((sorted_box_predictions.shape[0]))
+            ious[i + 1:] = bbox_iou(sorted_box_predictions[i, :], sorted_box_predictions[i + 1:, :])
+        except ValueError:
+            break
+        except IndexError:
+            break
+
+        # eliminate all detections which have IoU > threshold
+        overlap_mask = np.where(ious < nms_threshold, True, False)
+        sorted_box_predictions = sorted_box_predictions[overlap_mask]
+        sorted_class_predictions = sorted_class_predictions[overlap_mask]
+
+    return sorted_class_predictions, sorted_box_predictions
+
+
+####################
+# bounding box IoU #
+####################
 
 def bbox_iou(box1, boxes):
+    """
+    Compute the bounding box IoUs between the given bounding box "box1" and a number of bounding boxes in "boxes"
+    :param box1: given bounding box | shape: [8, ]
+    :param boxes: bounding boxes for which IoU with box1 is to be computed | shape: [N, 8]
+    :return: IoUs for each box in "boxes" with "box1" | shape: [N, ]
+    """
 
     # currently inspected box
-    box1 = box1.view([2, 4]).permute([1, 0])  # reshape bounding box corners
-    rect_1 = Polygon([(box1[0, 0], box1[0, 1]), (box1[1, 0], box1[1, 1]), (box1[2, 0], box1[2, 1]), (box1[3, 0], box1[3, 1])])
+    box1 = box1.reshape((2, 4)).T
+    rect_1 = Polygon([(box1[0, 0], box1[0, 1]), (box1[1, 0], box1[1, 1]), (box1[2, 0], box1[2, 1]),
+                      (box1[3, 0], box1[3, 1])])
     area_1 = rect_1.area
 
     # IoU of box1 with each of the boxes in "boxes"
-    ious = torch.zeros([boxes.size(0)])
-    for box_id in range(boxes.size(0)):
-        box2 = boxes[box_id, :]
-        box2 = box2.view([2, 4]).permute([1, 0])  # reshape bounding box corners
-        rect_2 = Polygon([(box2[0, 0], box2[0, 1]), (box2[1, 0], box2[1, 1]), (box2[2, 0], box2[2, 1]), (box2[3, 0], box2[3, 1])])
+    ious = np.zeros(boxes.shape[0])
+    for box_id in range(boxes.shape[0]):
+        box2 = boxes[box_id]
+        box2 = box2.reshape((2, 4)).T
+        rect_2 = Polygon([(box2[0, 0], box2[0, 1]), (box2[1, 0], box2[1, 1]), (box2[2, 0], box2[2, 1]),
+                          (box2[3, 0], box2[3, 1])])
         area_2 = rect_2.area
 
         # get intersection of both bounding boxes
         inter_area = rect_1.intersection(rect_2).area
 
         # compute IoU of the two bounding boxes
-        iou_bev = inter_area / (area_1 + area_2 - inter_area)
-        ious[box_id] = iou_bev
+        iou = inter_area / (area_1 + area_2 - inter_area)
+        ious[box_id] = iou
 
     return ious
 
@@ -40,205 +135,264 @@ def bbox_iou(box1, boxes):
 # process predictions #
 #######################
 
-
-def process_predictions(predictions, confidence=0.6, nms_conf=0.3):
-    # print('Prediction Size: ', predictions.size())
-    # pass class prediction through a sigmoid activation
-    sigmoid = nn.Sigmoid()
-    classification_prediction = sigmoid(predictions[:, :, :, -1])
-    predictions[:, :, :, -1] = classification_prediction
-    print('Min Confidence Score: {:.4f}'.format(torch.min(classification_prediction).item()))
-    print('Max Confidence Score: {:.4f}'.format(torch.max(classification_prediction).item()))
-
-    # create a mask for all predictions with confidence higher than threshold
-    conf_mask = (classification_prediction > confidence).float().unsqueeze(3)
-    # zero out all predictions with confidence lower than threshold
-    predictions = predictions * conf_mask
-
-    print('Number of valid detections:', int(torch.sum(conf_mask).item()))
-    print('Number of invalid detections: ', int(conf_mask.numel() - torch.sum(conf_mask).item()))
+def process_predictions(batch_predictions, confidence_threshold=0.2, nms_threshold=0.05):
+    """
+    Process the raw network output into thresholded and non-overlapping final bounding box predictions for all samples in
+    the batch.
+    :param batch_predictions: raw network output for entire batch |
+           shape: [batch_size, OUTPUT_DIM_0, OUTPUT_DIM_1, OUTPUT_DIM_CLA+OUTPUT_DIM_REG]
+    :param confidence_threshold: minimum confidence score in order for a prediction to be considered valid
+    :param nms_threshold: threshold for maximum IoU in order for two boxes to be considered non-overlapping
+    :return: final_batch_predictions: processed bounding box predictions | shape: [N_FINAL, 10]
+    """
 
     # inverse normalization
-    predictions[:, :, :, :-1] = (predictions[:, :, :, :-1] * torch.tensor(REG_STD).float()) + torch.tensor(REG_MEAN).float()
-    prediction_mask = (predictions[:, :, :, :-1] != torch.tensor(REG_MEAN).float()).float()
-    predictions[:, :, :, :-1] = predictions[:, :, :, :-1] * prediction_mask
+    batch_predictions[:, :, :, :-1] = (batch_predictions[:, :, :, :-1] * REG_STD) + REG_MEAN
 
-    # perform NMS for each prediction in batch
-    batch_size = predictions.size(0)
-    # store final predictions
-    final_predictions = None
-    for idp in range(batch_size):
+    # process targets and perform NMS for each prediction in batch
+    final_batch_predictions = None  # store final bounding box predictions
+    for point_cloud_id in range(batch_predictions.shape[0]):
+
         # get all predictions for single point cloud
-        prediction = predictions[idp]
+        point_cloud_predictions = batch_predictions[point_cloud_id]
 
-        # store final predictions after NMS
-        final_prediction = None
-        for i in range(prediction.size(0)):
-            for j in range(prediction.size(1)):
-                regression_prediction = prediction[i, j, :-1]
-                classification_prediction = prediction[i, j, -1].unsqueeze(0).unsqueeze(1)
+        # reshape predictions
+        point_cloud_predictions = point_cloud_predictions.reshape(
+            (OUTPUT_DIM_0 * OUTPUT_DIM_1, OUTPUT_DIM_CLA + OUTPUT_DIM_REG))
 
-                if torch.sum(torch.abs(regression_prediction)):
+        # separate classification and regression output
+        point_cloud_class_predictions = point_cloud_predictions[:, -1]
+        point_cloud_reg_predictions = point_cloud_predictions[:, :-1]
 
-                    # get angle from prediction
-                    angle = torch.tensor(math.atan2(regression_prediction[1], regression_prediction[0]))
-                    c = torch.cos(angle)
-                    s = torch.sin(angle)
-                    R = torch.tensor([[c, s], [-s, c]])
+        # get valid detections
+        validity_mask = np.where(point_cloud_class_predictions > confidence_threshold, True, False)
+        valid_reg_predictions = point_cloud_reg_predictions[validity_mask]
+        valid_class_predictions = point_cloud_class_predictions[validity_mask]
 
-                    # get location of bounding box
-                    pixel_location_x_m = (j * (INPUT_DIM_1 / OUTPUT_DIM_1 * VOX_Y_DIVISION)) + VOX_Y_MIN
-                    pixel_location_y_m = VOX_X_MAX - (i * (INPUT_DIM_0 / OUTPUT_DIM_0 * VOX_X_DIVISION))
-                    center_x = pixel_location_x_m - regression_prediction[2]
-                    center_y = pixel_location_y_m - regression_prediction[3]
-
-                    # get size of bounding box
-                    width = torch.exp(regression_prediction[4])
-                    length = torch.exp(regression_prediction[5])
-
-                    # get corners of bounding box
-                    x_corners = torch.tensor([length / 2, length / 2, -length / 2, -length / 2]).unsqueeze(0)
-                    y_corners = torch.tensor([-width / 2, width / 2, width / 2, -width / 2]).unsqueeze(0)
-
-                    # rotate and translate bounding box
-                    corners_bev = torch.mm(R, torch.cat([x_corners, y_corners], dim=0))
-                    corners_bev[0, :] = corners_bev[0, :] + center_x
-                    corners_bev[1, :] = corners_bev[1, :] + center_y
-
-                    debug = False
-                    if i > 80 and j > 80 and debug:
-                        bev_img = np.zeros((700, 800, 3))
-                        print_corners = corners_bev.detach().numpy().T
-
-                        print('Angle: ', int(angle / (2 * math.pi) * 360))
-                        print('Length: ', length.item())
-                        print('Width: ', width.item())
-                        print('Pixel X: ', pixel_location_x_m)
-                        print('Pixel Y: ', pixel_location_x_m)
-                        print('Center X: ', center_x.item())
-                        print('Center Y: ', center_y.item())
-
-                        bev_img = kitti_utils.draw_projected_box_bev(bev_img, print_corners)
-                        cv2.imshow('bev', bev_img)
-                        cv2.waitKey()
-
-                    corners_bev = corners_bev.flatten().unsqueeze(0)
-                    pixel_prediction = (corners_bev, classification_prediction)
-                    pixel_prediction = torch.cat(pixel_prediction, 1)
-
-                    if final_prediction is None:
-                        final_prediction = pixel_prediction
-                    else:
-                        final_prediction = torch.cat([final_prediction, pixel_prediction], dim=0)
-                else:
-                    continue
-
-        # continue in case no positive predictions were made for entire sample
-        if final_prediction is None:
-            continue
-
-        # get rid of all bounding boxes with object confidence below threshold (set to 0 before)
-        non_zero_ind = (torch.nonzero(final_prediction[:, 8]))
-        try:
-            final_prediction = final_prediction[non_zero_ind.squeeze(), :].view(-1, 9)
-        except:
-            continue
-
-        # For PyTorch 0.4 compatibility
-        # Since the above code with not raise exception for no detection
-        # as scalars are supported in PyTorch 0.4
-        if final_prediction.shape[0] == 0:
-            continue
-
-        # sort the detections such that the entry with the maximum confidence score is at the top
-        conf_sort_index = torch.sort(final_prediction[:, 8], descending=True)[1]
-        final_prediction = final_prediction[conf_sort_index]
-        n_detections = final_prediction.size(0)  # Number of detections
-        # print('Number of positive detections before NMS: ', n_detections)
-
-        # perform NMS
-        for i in range(n_detections):
-            # get the IOUs of all boxes that come after the one we are looking at
-            try:
-                ious = bbox_iou(final_prediction[i, :-1].unsqueeze(0), final_prediction[i + 1:, :-1])
-            # break out of loop using exceptions due to dynamically changing tensor image_pred_class
-            except ValueError:
-                break
-            except IndexError:
-                break
-
-            # zero out all the detections that have IoU > threshold
-            iou_mask = (ious < nms_conf).float().unsqueeze(1)
-            final_prediction[i + 1:] *= iou_mask
-
-            # remove non-zero entries
-            non_zero_ind = torch.nonzero(final_prediction[:, 0]).squeeze()
-            final_prediction = final_prediction[non_zero_ind].view(-1, 9)
-
-        batch_ind = torch.zeros([final_prediction.size(0), 1]).fill_(idp)
-        # Repeat the batch_id for as many detections of the class cls in the image
-        final_prediction = torch.cat([batch_ind, final_prediction], dim=1)
-
-        print('Number of final detections: ', final_prediction.size(0))
-
-        if final_predictions is None:
-            final_predictions = final_prediction
+        # continue if no valid predictions
+        if valid_reg_predictions.shape[0]:
+            valid_box_predictions = process_regression_target(valid_reg_predictions, validity_mask)
         else:
-            final_predictions = torch.cat([final_predictions, final_prediction])
+            continue
 
-    return final_predictions
+        # perform Non-Maximum Suppression
+        final_class_predictions, final_box_predictions = perform_nms(valid_class_predictions, valid_box_predictions,
+                                                                     nms_threshold)
+
+        # concatenate point_cloud_id, confidence score and bounding box prediction | shape: [N_FINAL, 1+1+8]
+        point_cloud_ids = np.ones((final_box_predictions.shape[0], 1)) * point_cloud_id
+        final_point_cloud_predictions = np.hstack((point_cloud_ids, final_class_predictions[:, np.newaxis],
+                                                   final_box_predictions))
+
+        # stack final predictions for all point clouds in batch
+        if final_batch_predictions is None:
+            final_batch_predictions = final_point_cloud_predictions
+        else:
+            final_batch_predictions = np.vstack((final_batch_predictions, final_point_cloud_predictions))
+
+    return final_batch_predictions
 
 
-###############
-# Train Model #
-###############
+##################
+# evaluate model #
+##################
 
 
-def evaluate_model(model, data_loader):
+def evaluate_model(model, data_loader, distance_ranges, iou_thresholds):
+    """
+    Evaluate the performance of a trained model on the test set. Store an "eval_dict" with all relevant performance
+    metrics for further inspection and plotting of graphs.
+    :param model: trained PIXOR model
+    :param data_loader: PyTorch data loader containing the test dataset
+    :param distance_ranges: list of all distance ranges for which evaluation should be performed in descending order.
+           Example:  [50] -> only detections within 0-50m, [30, 50] -> separate evaluation of 0-30m and 0-50m detections
+    :param iou_thresholds: list of IoU thresholds for which the model should be evaluated.
+           Example: [0.5] -> detections with an IoU of 0.5 or higher with a ground truth box are regarded as positive
+    :return: eval_dict: dictionary containing precision, recall and AP for each threshold at each distance + mAP
+             averaged over all thresholds for each distance range
+    """
 
-    model.eval()  # Set model to evaluate mode
+    model.eval()  # set model to evaluate mode
 
+    # set up evaluation dictionary
+    eval_dict = {distance_range: {'targets': {threshold: [] for threshold in iou_thresholds}, 'scores': [], 'n_labels': 0}
+                 for distance_range in distance_ranges}
+
+    # iterate over all batches in test dataset
     for batch_id, (batch_data, batch_labels, batch_calib) in enumerate(data_loader):
 
         with torch.set_grad_enabled(False):
+
             # forward pass
             batch_predictions = model(batch_data)
-            batch_predictions = batch_predictions.permute([0, 2, 3, 1])
+
+            # convert network output to numpy for further processing
+            batch_predictions = np.transpose(batch_predictions.detach().numpy(), (0, 2, 3, 1))
 
             # get final bounding box predictions
-            output = process_predictions(batch_predictions)
+            final_box_predictions = process_predictions(batch_predictions)
 
-            # display predictions and labels on BEV image
-            batch_size = batch_data.size(0)
-            for id in range(batch_size):
-                # get point cloud as numpy array
-                point_cloud = batch_data[id].detach().numpy().transpose((1, 2, 0))
-                # draw BEV image
-                bev_img = kitti_utils.draw_bev_image(point_cloud)
+            # iterate over all point clouds in batch
+            for point_cloud_id in range(batch_data.size(0)):
 
-                # in case of valid predictions, draw bounding boxes on BEV image
-                if output is not None:
-                    # get predictions for currently inspected point cloud
-                    predictions = torch.stack([prediction for prediction in output if prediction[0] == id], dim=0)
-                    for idp in range(predictions.size(0)):
-                        # get bbox corners
-                        bbox_corners_camera_coord = predictions[idp, 1:-1].detach().numpy()
-                        bbox_corners_camera_coord = np.reshape(bbox_corners_camera_coord, (2, 4)).T
-                        # draw bbox on BEV image
-                        bev_img = kitti_utils.draw_projected_box_bev(bev_img, bbox_corners_camera_coord, color=(0, 0, 255))
+                # in case of valid predictions, get predictions for currently inspected point cloud
+                if final_box_predictions is not None:
+                    point_cloud_predictions = np.vstack(
+                        [predictions for predictions in final_box_predictions if predictions[0] == point_cloud_id])
+                else:
+                    point_cloud_predictions = None
 
-                # draw labels on BEV image
-                for label in batch_labels[id]:
+                # get coordinates of all relevant ground truth boxes
+                ground_truth_box_corners = None
+                for label in batch_labels[point_cloud_id]:
+                    # only consider annotations for class "Car"
                     if label.type == 'Car':
                         # compute corners of the bounding box
-                        bbox_corners_image_coord, bbox_corners_camera_coord = kitti_utils.compute_box_3d(label, batch_calib[id].P)
-                        # draw BEV bounding box on BEV image
-                        bev_img = kitti_utils.draw_projected_box_bev(bev_img, bbox_corners_camera_coord, color=(0, 255, 0))
-                cv2.imshow('bev', bev_img)
-                cv2.waitKey()
+                        _, bbox_corners_camera_coord = kitti_utils.compute_box_3d(label, batch_calib[id].P)
+                        bbox_corners_camera_coord = np.hstack((bbox_corners_camera_coord[:4, 0], bbox_corners_camera_coord[:4, 2]))
+                        if ground_truth_box_corners is None:
+                            ground_truth_box_corners = bbox_corners_camera_coord
+                        else:
+                            ground_truth_box_corners = np.vstack((ground_truth_box_corners, bbox_corners_camera_coord))
+
+                assert np.all(np.diff(distance_ranges) <= 0)  # check that distance ranges monotonically decrease
+                # iterate over all distance ranges
+                for distance_range in distance_ranges:
+
+                    # valid predictions and labels exist for the currently inspected point cloud
+                    if ground_truth_box_corners is not None and point_cloud_predictions is not None:
+
+                        # remove all predictions and labels outside of the specified range
+                        max_distance_predictions = np.max(point_cloud_predictions[:, 6:], axis=1)
+                        max_distance_ground_truth = np.max(ground_truth_box_corners[:, 4:], axis=1)
+                        distance_mask_predictions = np.where(max_distance_predictions <= distance_range, True, False)
+                        distance_mask_ground_truth = np.where(max_distance_ground_truth <= distance_range, True, False)
+                        point_cloud_predictions = point_cloud_predictions[distance_mask_predictions]
+                        ground_truth_box_corners = ground_truth_box_corners[distance_mask_ground_truth]
+
+                        # valid predictions and labels exist inside the specified range
+                        if point_cloud_predictions.shape[0] and ground_truth_box_corners.shape[0]:
+
+                            # compute IoUs of all predictions with all bounding boxes and store the corresponding
+                            # confidence scores
+                            ious = np.zeros((point_cloud_predictions.shape[0], ground_truth_box_corners.shape[0]))
+                            confidence_scores = np.zeros((point_cloud_predictions.shape[0], ground_truth_box_corners.shape[0]))
+                            for pid, prediction in enumerate(point_cloud_predictions):
+                                ious[pid, :] = bbox_iou(prediction[2:], ground_truth_box_corners)
+                                confidence_scores[pid, np.argmax(ious[pid, :])] = prediction[1]
+
+                            # iterate over all thresholds to compute the number of positive detections
+                            for threshold in iou_thresholds:
+                                eval_dict[distance_range]['targets'][threshold].extend(np.where(np.max(ious, axis=1) > threshold, 1, 0))
+
+                            # store the predictions' confidence scores and the number of labels
+                            eval_dict[distance_range]['scores'].extend(np.max(confidence_scores, axis=1))
+                            eval_dict[distance_range]['n_labels'] += ground_truth_box_corners.shape[0]
+
+                        # valid predictions exist but no labels
+                        elif point_cloud_predictions.shape[0] and not ground_truth_box_corners.shape[0]:
+
+                            # store all predictions as negative detections
+                            for threshold in iou_thresholds:
+                                eval_dict[distance_range]['targets'][threshold].extend(np.zeros((point_cloud_predictions.shape[0],)))
+
+                            # store the predictions' confidence scores
+                            eval_dict[distance_range]['scores'].extend(point_cloud_predictions[:, 1])
+
+                        # valid labels exist but no predictions
+                        elif not point_cloud_predictions.shape[0] and ground_truth_box_corners.shape[0]:
+
+                            # increase the number of labels
+                            eval_dict[distance_range]['n_labels'] += ground_truth_box_corners.shape[0]
+
+                        # neither labels nor predictions exist
+                        else:
+                            continue
+
+                    # valid predictions exist for the currently inspected point cloud but no labels
+                    elif ground_truth_box_corners is None and point_cloud_predictions is not None:
+
+                        # remove all predictions outside of the specified range
+                        max_distance_predictions = np.max(point_cloud_predictions[:, 6:], axis=1)
+                        distance_mask_predictions = np.where(max_distance_predictions <= distance_range, True, False)
+                        point_cloud_predictions = point_cloud_predictions[distance_mask_predictions]
+
+                        # valid predictions exist inside the specified range
+                        if point_cloud_predictions.shape[0]:
+
+                            # store all predictions as negative detections
+                            for threshold in iou_thresholds:
+                                eval_dict[distance_range]['targets'][threshold].extend(np.zeros((point_cloud_predictions.shape[0],)))
+                            # store the predictions' confidence scores
+                            eval_dict[distance_range]['scores'].extend(point_cloud_predictions[:, 1])
+
+                    # valid labels exist for the currently inspected point cloud but no predictions
+                    elif point_cloud_predictions is None and ground_truth_box_corners is not None:
+
+                        # remove all labels outside of the specified range
+                        max_distance_ground_truth = np.max(ground_truth_box_corners[:, 6:], axis=1)
+                        distance_mask_ground_truth = np.where(max_distance_ground_truth <= distance_range, True, False)
+                        ground_truth_box_corners = ground_truth_box_corners[distance_mask_ground_truth]
+
+                        # valid labels exist inside specified range
+                        if ground_truth_box_corners.shape[0]:
+                            # increase the number of labels
+                            eval_dict[distance_range]['n_labels'] += ground_truth_box_corners.shape[0]
+                        else:
+                            continue
+
+                    # neither valid predictions nor labels exist for the currently inspected point cloud
+                    else:
+                        continue
+
+                print('++++++++++++++++++++++++++++++')
+                print('Analyze Point Cloud {:d}/{:d}'.format(batch_id*batch_size+point_cloud_id+1, data_loader.dataset.__len__()))
+
+    # compute performance metrics for each evaluated distance range
+    for distance_range in distance_ranges:
+
+        # sort the predictions according to the confidence score
+        sorted_indices = np.argsort(eval_dict[distance_range]['scores'])[::-1]
+        eval_dict[distance_range]['scores'] = np.array(eval_dict[distance_range]['scores'])[sorted_indices]
+
+        # iterate over all thresholds
+        for threshold in iou_thresholds:
+
+            # sort the targets to match the confidence scores
+            eval_dict[distance_range]['targets'][threshold] = np.array(eval_dict[distance_range]['targets'][threshold])[sorted_indices]
+
+            # create a dict to store all relevant performance metrics
+            performance_dict = {}
+
+            # compute recall
+            recall = list(np.cumsum(eval_dict[distance_range]['targets'][threshold]) / eval_dict[distance_range]['n_labels'])
+            recall.insert(0, 0.)  # start with 0
+            recall = np.array(recall)  # convert to numpy array for further processing
+            performance_dict['recall'] = recall
+
+            # compute precision
+            precision = [np.sum(eval_dict[distance_range]['targets'][threshold][:i + 1]) / (i + 1) for i in range(len(eval_dict[distance_range]['targets'][threshold]))]
+            precision.insert(0, 0.)  # start with 0
+            precision = np.array(precision)
+            performance_dict['precision'] = precision
+
+            # compute average precision
+            indices = np.where(recall[:-1] != recall[1:])[0] + 1
+            average_precision = np.sum((recall[indices] - recall[indices - 1]) * precision[indices])
+            performance_dict['AP'] = average_precision
+
+            # add performance_dict for currently inspected threshold to eval_dict
+            eval_dict[distance_range][threshold] = performance_dict
+
+        # compute mAP as the average of the AP over all IoU-thresholds
+        average_precisions = [eval_dict[distance_range][key]['AP'] for key in eval_dict[distance_range] if not isinstance(key, str)]
+        eval_dict[distance_range]['mAP'] = sum(average_precisions) / len(average_precisions)
+
+    return eval_dict
 
 
 if __name__ == '__main__':
+
     # set device
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
@@ -246,15 +400,19 @@ if __name__ == '__main__':
     batch_size = 1
 
     # create data loader
-    base_dir = 'kitti/'
-    dataset_dir = 'object/'
-    root_dir = os.path.join(base_dir, dataset_dir)
+    root_dir = 'Data/'
     data_loader = load_dataset(root=root_dir, batch_size=batch_size, device=device, test_set=True)
 
     # create model
     pixor = PIXOR()
-
-    pixor.load_state_dict(torch.load('Models/PIXOR_Epoch_15.pt', map_location=device))
+    n_epochs_trained = 17
+    pixor.load_state_dict(torch.load('Models/PIXOR_Epoch_' + str(n_epochs_trained) + '.pt', map_location=device))
 
     # evaluate model
-    evaluate_model(pixor, data_loader)
+    eval_dict = evaluate_model(pixor, data_loader, distance_ranges=[70, 50, 30], iou_thresholds=[0.5, 0.6, 0.7, 0.8, 0.9])
+
+    # add identifier to dictionary
+    eval_dict['epoch'] = n_epochs_trained
+
+    # save evaluation dictionary
+    np.savez('eval_dict_epoch_' + str(n_epochs_trained) + '.npz', eval_dict=eval_dict)
