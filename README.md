@@ -4,7 +4,7 @@
 In this repository you'll find an unofficial implementation of PIXOR using PyTorch. I implemented this project to gain some experience working with 3D object detection and familiarize myself with the *kitti dataset* used for training and evaluation of the model. The vast majority of the code presented in this repository is written by myself based on my interpretation of the [original paper](https://arxiv.org/pdf/1902.06326.pdf). Parts of the helper functions for loading and displaying data in ```kitti_utils.py``` are inspired by the [kitti_object_vis](https://github.com/kuixu/kitti_object_vis) repository.
 
 <p align="center"> 
-<img height="400px" src="/Images/detections.png">
+<img src="/Images/detections.png">
 </p>
 
 
