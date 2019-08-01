@@ -1,7 +1,7 @@
 
 *.txt
 *.bin
-*.png
+Data
 *.pt
 *.npz
 .DS_Store
@@ -11,17 +11,5 @@ __pycache__/kitti_utils.cpython-36.pyc
 __pycache__/load_data.cpython-36.pyc
 __pycache__/PIXOR_Net.cpython-36.pyc
 __pycache__/show_gt.cpython-36.pyc
-eval/.DS_Store
-kitti/.DS_Store
-kitti/object/.DS_Store
-kitti/object/testing/.DS_Store
-kitti/object/testing/calib/.DS_Store
-kitti/object/testing/label_2/.DS_Store
-kitti/object/testing/velodyne/.DS_Store
-kitti/object/training/.DS_Store
-kitti/object/training/calib/.DS_Store
-kitti/object/training/image_2/.DS_Store
-kitti/object/training/label_2/.DS_Store
-kitti/object/training/velodyne/.DS_Store
 Metrics/.DS_Store
 Models/.DS_Store
