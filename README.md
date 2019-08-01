@@ -3,6 +3,11 @@
 
 In this repository you'll find an unofficial implementation of PIXOR using PyTorch. I implemented this project to gain some experience working with 3D object detection and familiarize myself with the *kitti dataset* used for training and evaluation of the model. The vast majority of the code presented in this repository is written by myself based on my interpretation of the [original paper](https://arxiv.org/pdf/1902.06326.pdf). Parts of the helper functions for loading and displaying data in ```kitti_utils.py``` are inspired by the [kitti_object_vis](https://github.com/kuixu/kitti_object_vis) repository.
 
+<p align="center"> 
+<img height="400px" src="/Images/detections.png">
+</p>
+
+
 ### Requirements
 
 The project is built using a small set of libraries. Post-processing is predominantly performed in numpy with scipy being used for some vectorized operations. Shapely is required for the calculation of bounding box IoUs. All image modifications are performed using OpenCV while matplotlib is used for plotting of training history and evaluation plots.
@@ -52,7 +57,7 @@ With a PIXOR model trained and saved to the Models folder of the working directo
 By running ```evaluate_model.py```, a dictionary containing all relevant performance measures is created and saved. Prior to the execution a folder ```Eval```has to be created in the working directory. Having created the evaluation dictionary, the evaluation can be visualized using ```visualize_evaluation.py```. For each of the evaluated distance ranges, Precision-Recall-Curves are plotted for each of the specified IoU thresholds. Moreover, the final mAP for each distance range is displayed.
 
 <p align="center"> 
-<img height="250px" src="/Images/Precision_Recall_Curves/pr_curve.png">
+<img height="250px" src="/Images/pr_curve.png">
 </p>
 
 
