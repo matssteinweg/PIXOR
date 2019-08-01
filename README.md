@@ -52,7 +52,7 @@ With a PIXOR model trained and saved to the Models folder of the working directo
 By running ```evaluate_model.py```, a dictionary containing all relevant performance measures is created and saved. Prior to the execution a folder ```Eval```has to be created in the working directory. Having created the evaluation dictionary, the evaluation can be visualized using ```visualize_evaluation.py```. For each of the evaluated distance ranges, Precision-Recall-Curves are plotted for each of the specified IoU thresholds. Moreover, the final mAP for each distance range is displayed.
 
 <p align="center"> 
-<img height="400px" src="/Images/pr_curve_epoch_17.png">
+<img height="400px" src="/Images/Precision_Recall_Curves/pr_curve_epoch_17.png">
 </p>
 
 
