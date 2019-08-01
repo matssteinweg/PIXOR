@@ -5,7 +5,7 @@ from evaluate_model import *
 ###############
 
 
-def show_legend(image, ground_truth_color, prediction_color):
+def show_legend(image, ground_truth_color, prediction_color, idx):
     """
     Display legend for color codes in provided image.
     :param image: image on which to display the legend
@@ -14,16 +14,20 @@ def show_legend(image, ground_truth_color, prediction_color):
 
     text1 = 'Ground Truth'
     text2 = 'Prediction'
+    text3 = 'Point Cloud Index: {:d}'.format(idx)
     font = cv2.FONT_HERSHEY_DUPLEX
     font_scale = 0.7
     thickness = 1
     size1 = cv2.getTextSize(text1, font, font_scale, thickness)
     size2 = cv2.getTextSize(text2, font, font_scale, thickness)
+    size3 = cv2.getTextSize(text3, font, font_scale, thickness)
     rectangle = cv2.rectangle(image, (20, 20),
-                              (20 + max(size1[0][0], size2[0][0]) + 10, 20 + size1[0][1] + size2[0][1] + 15),
+                              (20 + max(size1[0][0], size2[0][0], size3[0][0]) + 10,
+                               20 + size1[0][1] + size2[0][1] + size3[0][1] + 20),
                               (200, 200, 200), 1)
-    cv2.putText(rectangle, 'Ground Truth', (25, 25 + size1[0][1]), font, font_scale, ground_truth_color, 1)
-    cv2.putText(rectangle, 'Prediction', (25, 30 + size1[0][1] + size2[0][1]), font, font_scale, prediction_color, 1)
+    cv2.putText(rectangle, text3, (25, 25 + size3[0][1]), font, font_scale, (100, 100, 100), 1)
+    cv2.putText(rectangle, text1, (25, 30 + size1[0][1] + size3[0][1]), font, font_scale, ground_truth_color, 1)
+    cv2.putText(rectangle, text2, (25, 35 + size1[0][1] + size2[0][1] + size3[0][1]), font, font_scale, prediction_color, 1)
 
     return image
 
@@ -49,12 +53,12 @@ if __name__ == '__main__':
     dataset = PointCloudDataset(root_dir, split='testing', get_image=True)
 
     # select index from dataset
-    ids = np.arange(0, 300)
+    ids = np.arange(0, dataset.__len__())
 
-    for idx in ids:
+    for id in ids:
 
         # get image, point cloud, labels and calibration
-        camera_image, point_cloud, labels, calib = dataset.__getitem__(idx)
+        camera_image, point_cloud, labels, calib = dataset.__getitem__(id)
 
         # create model
         pixor = PIXOR()
@@ -119,9 +123,13 @@ if __name__ == '__main__':
                     camera_image = kitti_utils.draw_projected_box_3d(camera_image, bbox_corners_image_coord, color=prediction_color)
 
         # display legend on BEV Image
-        bev_image = show_legend(bev_image, ground_truth_color, prediction_color)
+        bev_image = show_legend(bev_image, ground_truth_color, prediction_color, id)
 
         # show images
-        cv2.imshow('BEV Image', bev_image)
-        cv2.imshow('Camera Image', camera_image)
-        cv2.waitKey()
+        # cv2.imshow('BEV Image', bev_image)
+        # cv2.imshow('Camera Image', camera_image)
+        # cv2.waitKey()
+
+        # save image
+        print('Index: ', id)
+        cv2.imwrite('Images/Detections/detection_id_{:d}.png'.format(id), bev_image)
