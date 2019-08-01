@@ -2,8 +2,7 @@
 <project version="4">
   <component name="ChangeListManager">
     <list default="true" id="88b5f044-1400-4fd1-b640-097a60f32cfd" name="Default Changelist" comment="">
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/detector.py" beforeDir="false" afterPath="$PROJECT_DIR$/detector.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Images/Precision_Recall_Curves/pr_curve_epoch_17.png" beforeDir="false" />
     </list>
     <option name="EXCLUDED_CONVERTED_TO_IGNORED" value="true" />
     <option name="SHOW_DIALOG" value="false" />
