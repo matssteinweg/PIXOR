@@ -2,6 +2,7 @@
 *.txt
 *.bin
 Data
+Images/Detections
 *.pt
 *.npz
 .DS_Store
