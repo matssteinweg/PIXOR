@@ -52,5 +52,7 @@ With a PIXOR model trained and saved to the Models folder of the working directo
 By running ```evaluate_model.py```, a dictionary containing all relevant performance measures is created and saved. Prior to the execution a folder ```Eval```has to be created in the working directory. Having created the evaluation dictionary, the evaluation can be visualized using ```visualize_evaluation.py```. For each of the evaluated distance ranges, Precision-Recall-Curves are plotted for each of the specified IoU thresholds. Moreover, the final mAP for each distance range is displayed. 
 
 #### Detection
+Having trained a PIXOR model, the detector can be run on unseen point clouds. For an visual inspection of the resulting detections, run ```detector.py```. In this script, the detector is run on a set of selected indices from the test set and the results are displayed. In order to get a good intuition about the quality of the results, the detections are displayed on a BEV representation of the point cloud along with the ground truth bounding boxes. Furthermore, an option exists to also display the original camera image along with projections of the predicted and annotated bounding boxes.
+
 
 
