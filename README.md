@@ -42,7 +42,7 @@ Data
 ### Implementation Details
 
 The implementation and evaluation of the model is aimed to reproduce the approach taken in the original paper. This refers to the basic implementation details provided in the paper. Modifications discussed in the ablation study are not included. 
-A difference worth mentioning is that the model was trained in a binary classification manner. Instead of considering all available classes of the kitti dataset (Car, Van, Truck, Pedestrian, Person (sitting), Cyclist, Tram and Misc) the model is merely trained on annotations of the class Car. This is expected to be updated in the future to a model trained on all classes.
+A difference worth mentioning is that the model was trained in a binary classification manner. Instead of considering all available classes of the kitti dataset (Car, Van, Truck, Pedestrian, Person (sitting), Cyclist, Tram and Misc) the model is merely trained on annotations of the class Car. This is expected to be updated in the future.
 
 ### How-To Navigate the Project
 
