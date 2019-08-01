@@ -10,7 +10,7 @@ In this repository you'll find an unofficial implementation of PIXOR using PyTor
 
 ### Requirements
 
-The project is built using a small set of libraries. Post-processing is predominantly performed in numpy with scipy being used for some vectorized operations. Shapely is required for the calculation of bounding box IoUs. All image modifications are performed using OpenCV while matplotlib is used for plotting of training history and evaluation plots.
+The project is built using a small set of libraries. Post-processing is predominantly performed in numpy with scipy being used for some vectorized operations. Shapely is required for the calculation of bounding box IoUs. All image modifications are performed using OpenCV while matplotlib is used for plotting training history and evaluation graphs.
 ```
 torch 1.1.0
 shapely
@@ -23,7 +23,7 @@ numpy
 ### Dataset
 
 The kitti dataset is among the most widely used datasets for the development of computer vision and sensor fusion applications. The dataset can be downloaded from the [official website](http://www.cvlibs.net/datasets/kitti/eval_object.php?obj_benchmark=bev) for free. For this project I only used the LiDAR point clouds. However, I downloaded the camera images as well to get a better idea of the car's surroundings during the dataset exploration. Furthermore, I downloaded the camera calibration matrices and the bounding box annotations. 
-The project requires the dataset to be save according to the following structure:
+The project requires the dataset to be saved according to the following structure:
 ```
 Data
   training
